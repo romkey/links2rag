@@ -1,6 +1,6 @@
 [project]
 name = "links2rag"
-version = "0.0.0"
+version = "0.1.0"
 description = "Asset and equipment-manual source of the PDX Hackerspace RAG pipeline: the asset manager into PostgreSQL and Qdrant."
 readme = "README.md"
 license = "MIT"
