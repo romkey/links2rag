@@ -7,10 +7,15 @@ Modes:
 - ``full``: the same, plus every point not stamped with this run's ID is
   deleted, unless the run saw less than half the things of the previous one.
 - ``reindex``: rebuild every point from staging without reading the asset
-  manager, re-embedding everything (after a model or chunking change).
+  manager or downloading manuals, re-embedding everything (after a model or
+  chunking change).
+
+After the assets, the manuals they link to are synced (see manual_sync.py):
+links due for a check are downloaded, files are staged once per SHA-256,
+and their chunks indexed with the linking assets' IDs.
 
 ``force`` (``run --force``, or ``FORCE_REINDEX`` for serve's first scan)
-restages and re-embeds everything as well.
+restages, re-downloads, re-parses and re-embeds everything as well.
 """
 
 from __future__ import annotations
@@ -33,6 +38,7 @@ from links2rag.config import Settings
 from links2rag.db import Database, RunCounts, StagedDocument
 from links2rag.documents import (
     ASSET_SOURCE,
+    MANUAL_SOURCE,
     TIER,
     base_payload,
     payload_hash,
@@ -42,6 +48,13 @@ from links2rag.embeddings import Embedder, build_embedder
 from links2rag.linker import Linker
 from links2rag.links_client import LinksClient
 from links2rag.llm import LLM, LLMError
+from links2rag.manual_sync import (
+    DEAD_STATUSES,
+    FetcherLike,
+    ManualSync,
+    build_fetcher,
+    build_ocr,
+)
 from links2rag.qdrant_store import COMMON_INDEXES, LINKS_INDEXES, QdrantStore
 from links2rag.sparse import SPARSE_ENCODER, sparse_vector
 
@@ -90,10 +103,13 @@ class Pipeline:
         qdrant: QdrantClient,
         client: LinksSource,
         llm: LLM | None = None,
+        fetcher: FetcherLike | None = None,
+        ocr: Callable[[bytes], str] | None = None,
         stop: threading.Event | None = None,
         beat: Callable[[], None] | None = None,
     ) -> None:
         self.settings = settings
+        self.fetcher = fetcher
         self.db = db
         self.embedder = embedder
         self.client = client
@@ -121,11 +137,26 @@ class Pipeline:
             ((r["entity_type"], r["entity_id"], r["alias"]) for r in db.aliases()),
             self._confirm_link if llm is not None else None,
         )
+        self.manuals = (
+            ManualSync(
+                settings=settings,
+                db=db,
+                store=self.member,
+                fetcher=fetcher,
+                embed=lambda store, items, force: self._embed_points(items, force=force),
+                llm=llm,
+                ocr=ocr,
+                stop=self.stop,
+                beat=self.beat,
+            )
+            if settings.manuals_enabled and fetcher is not None
+            else None
+        )
 
     def close(self) -> None:
         """Close the HTTP clients this pipeline opened; serve builds one per scan."""
         self.qdrant.close()
-        for client in (self.embedder, self.llm):
+        for client in (self.embedder, self.llm, self.fetcher):
             closer = getattr(client, "close", None)
             if closer is not None:
                 closer()
@@ -165,7 +196,7 @@ class Pipeline:
                 self.db.conn.rollback()
                 self.db.finish_run(run_id=run_id, counts=counts, ok=False, message=str(e))
                 raise
-            counts.quarantined = self.db.quarantine_count([ASSET_SOURCE])
+            counts.quarantined = self.db.quarantine_count([ASSET_SOURCE, MANUAL_SOURCE])
             self.db.finish_run(
                 run_id=run_id, counts=counts, ok=result.status == "ok", message=result.message
             )
@@ -176,6 +207,10 @@ class Pipeline:
             counts.seen = len(self.db.staged_versions(ASSET_SOURCE))
             self.index_assets(None, run_id, counts, force=True)
             self._delete_stale(run_id)
+            if self.manuals is not None:
+                self.manuals.run(
+                    run_id, counts, force=True, full=True, allow_delete=True, fetch=False
+                )
             return RunResult("ok", counts)
 
         things = self.client.list_things()
@@ -224,6 +259,10 @@ class Pipeline:
         self._index_or_forget(changed, todo, run_id, counts, force=force)
         if mode == "full" and status == "ok":
             self._delete_stale(run_id)
+        if self.manuals is not None and not self.stop.is_set():
+            self.manuals.run(
+                run_id, counts, force=force, full=mode == "full", allow_delete=status == "ok"
+            )
         return RunResult(status, counts, message)
 
     def _index_or_forget(
@@ -492,6 +531,8 @@ def build_pipeline(
         qdrant=QdrantClient(url=settings.qdrant_url, api_key=settings.qdrant_api_key),
         client=client,
         llm=build_llm(settings, db),
+        fetcher=build_fetcher(settings) if settings.manuals_enabled else None,
+        ocr=build_ocr(settings) if settings.manuals_enabled else None,
         stop=stop,
         beat=beat,
     )
@@ -536,11 +577,15 @@ def status(settings: Settings) -> JSON:
     """Recent runs, quarantine and asset counts: the source's status page."""
     with Database.connect(settings.database_url) as db:
         assets = db.assets()
+        links = db.manual_links().values()
         return {
             "source": RUN_SOURCE,
             "runs": db.recent_runs(RUN_SOURCE),
-            "quarantined": db.quarantine_count([ASSET_SOURCE]),
+            "quarantined": db.quarantine_count([ASSET_SOURCE, MANUAL_SOURCE]),
             "assets": sum(1 for a in assets if a["indexable"]),
             "assets_excluded": sum(1 for a in assets if not a["indexable"]),
             "aliases_pending_review": len(db.alias_queue()),
+            "manuals": len(db.staged_versions(MANUAL_SOURCE)),
+            "manual_links": len(links),
+            "manual_links_failing": sum(1 for r in links if r["status"] in DEAD_STATUSES),
         }

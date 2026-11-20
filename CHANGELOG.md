@@ -18,3 +18,11 @@ All notable changes to this project are documented here. The format follows
 - `serve` (scan, sleep `SCAN_INTERVAL_MINUTES`, repeat), `run --mode
   incremental|full|reindex`, `--force` and `FORCE_REINDEX` for a complete
   rebuild, `status`, `migrate` and `healthcheck`.
+- Equipment manuals (`source: manual`): manual links, manufacturer pages
+  (one level) and drop-in files are downloaded, deduplicated by SHA-256 and
+  kept in `DATA_DIR`; PDFs are parsed with their outline or font-size
+  headings, tables kept whole with their caption, scanned pages OCRed with
+  tesseract and diagram pages described by `VISION_MODEL`. Chunks follow the
+  manual's sections, carry their page and a `#page=N` link, and are tagged
+  with a `manual_section` kind. Only English is indexed. Dead links are
+  recorded and keep their last good copy.
