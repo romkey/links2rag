@@ -451,3 +451,72 @@ def test_build_fetcher(make_settings: SettingsFactory) -> None:
     assert fetcher.max_bytes == 2 * 1024 * 1024
     assert "links.example.com" in fetcher.skip_hosts
     fetcher.close()
+
+
+def test_a_file_on_several_pages_keeps_every_asset(db: Database, settings: Settings) -> None:
+    # Two saws reach the same PDF through different downloads pages; a third
+    # asset links to the file directly.
+    page_a = b"<html><body><a href='/files/saw.pdf'>Manual</a></body></html>"
+    page_b = b"<html><body><a href='https://v.example.com/files/saw.pdf'>Manual</a></body></html>"
+    direct = thing(
+        "fence001",
+        thing_id=5,
+        name="Saw fence",
+        links=[_link("Manual", "https://v.example.com/files/saw.pdf")],
+    )
+    client = FakeLinksClient(
+        _saw(url="https://v.example.com/dl-a"),
+        _saw("saw00002", 2, "https://www.v.example.com/dl-b"),
+        direct,
+    )
+    fetcher = FakeFetcher(
+        {
+            "https://v.example.com/dl-a": page_a,
+            "https://www.v.example.com/dl-b": page_b,
+            "https://v.example.com/files/saw.pdf": SAW_PDF,
+        }
+    )
+    p = _pipeline(db, settings, client, fetcher)
+    p.run("full")
+    row = db.manual_links()["https://v.example.com/files/saw.pdf"]
+    assert row["asset_ids"] == ["fence001", "saw00001", "saw00002"]
+    assert row["parent_urls"] == ["https://v.example.com/dl-a", "https://www.v.example.com/dl-b"]
+    assert row["origin"] == "link"
+    assert {tuple(pl["asset_ids"]) for pl in _manual_payloads(p)} == {
+        ("fence001", "saw00001", "saw00002")
+    }
+    # One page stops listing the file: that page's asset loses it on the next check.
+    fetcher.responses["https://www.v.example.com/dl-b"] = b"<html><body>Moved</body></html>"
+    p.run("full", force=True)
+    row = db.manual_links()["https://v.example.com/files/saw.pdf"]
+    assert row["asset_ids"] == ["fence001", "saw00001"]
+    assert row["parent_urls"] == ["https://v.example.com/dl-a"]
+
+
+def test_secrets_never_reach_staging_or_the_llm(db: Database, settings: Settings) -> None:
+    pdf = build_pdf(
+        [Page([("Setup", 20), ("Default password = hunter2hunter2 for the admin", 10)])]
+    )
+    seen: list[str] = []
+
+    class RecordingLLM(FakeLLM):
+        def chunk_context(self, *, document_title: str, document: str, chunk: str) -> str:
+            seen.extend([document, chunk])
+            return "ctx"
+
+    client = FakeLinksClient(_saw())
+    p = _pipeline(
+        db,
+        settings,
+        client,
+        FakeFetcher({"https://v.example.com/saw.pdf": pdf}),
+        llm=RecordingLLM(),
+    )
+    p.run("full")
+    (manual_id,) = db.staged_versions("manual")
+    staged = db.staged_document("manual", manual_id)
+    assert staged is not None
+    assert "hunter2" not in staged["extracted_text"]
+    assert "hunter2" not in json.dumps(staged["raw_content"])
+    assert seen
+    assert all("hunter2" not in text for text in seen)

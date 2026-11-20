@@ -1,4 +1,4 @@
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 
 import httpx
 import pytest
@@ -157,3 +157,38 @@ def test_pdf_links_and_downloads_pages() -> None:
     assert not is_downloads_page(long_page, every)
     many = b"".join(b'<a href="/f%d.pdf">x</a>' % n for n in range(20))
     assert len(pdf_links(many, base, pattern_match=match, require_match=False)) == MAX_DISCOVERED
+
+
+class _Stream(httpx.SyncByteStream):
+    def __init__(self, addr: tuple[str, int] | None) -> None:
+        self.addr = addr
+
+    def __iter__(self) -> Iterator[bytes]:
+        yield b"%PDF-1.4"
+
+    def get_extra_info(self, name: str) -> object:
+        return self.addr if name == "server_addr" else None
+
+
+@pytest.mark.parametrize(
+    ("addr", "status"),
+    [
+        (("10.0.0.7", 443), "blocked"),
+        (("fe80::1%en0", 443), "blocked"),
+        (("93.184.216.34", 443), "ok"),
+        (("not-an-ip", 443), "ok"),
+        (None, "ok"),
+    ],
+)
+def test_connected_address_is_checked(addr: tuple[str, int] | None, status: str) -> None:
+    # DNS rebinding: the check resolved a public address, the connection did not.
+    def handler(request: httpx.Request) -> httpx.Response:
+        stream = _Stream(addr)
+        return httpx.Response(200, stream=stream, extensions={"network_stream": stream})
+
+    result = _fetcher(handler).fetch("https://vendor.example.com/m.pdf")
+    assert result.status == status
+    if status == "blocked":
+        assert "non-public" in (result.error or "")
+    allowed = _fetcher(handler, allow_private=True).fetch("https://vendor.example.com/m.pdf")
+    assert allowed.status == "ok"

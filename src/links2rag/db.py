@@ -407,17 +407,18 @@ class Database:
         asset_ids: list[str],
         title: str | None,
         origin: str,
-        parent_url: str | None = None,
+        parent_urls: list[str] | None = None,
     ) -> None:
+        """Insert or replace a link. ``parent_urls``: the pages a discovered file was on."""
         self._exec(
             """
-            INSERT INTO asset_manual_links (url, asset_ids, title, origin, parent_url)
+            INSERT INTO asset_manual_links (url, asset_ids, title, origin, parent_urls)
             VALUES (%s, %s, %s, %s, %s)
             ON CONFLICT (url) DO UPDATE SET asset_ids = EXCLUDED.asset_ids,
                 title = EXCLUDED.title, origin = EXCLUDED.origin,
-                parent_url = EXCLUDED.parent_url
+                parent_urls = EXCLUDED.parent_urls
             """,
-            (url, sorted(set(asset_ids)), title, origin, parent_url),
+            (url, sorted(set(asset_ids)), title, origin, sorted(set(parent_urls or []))),
         )
 
     def record_fetch(

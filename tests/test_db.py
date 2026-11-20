@@ -156,8 +156,9 @@ def test_manual_links(db: Database) -> None:
     assert row["content_type"] == "pdf"
     assert row["last_ok_at"] is not None
     db.upsert_manual_link(
-        url="u1", asset_ids=["c"], title=None, origin="discovered", parent_url="p"
+        url="u1", asset_ids=["c"], title=None, origin="discovered", parent_urls=["p", "p"]
     )
     assert db.manual_links()["u1"]["asset_ids"] == ["c"]
+    assert db.manual_links()["u1"]["parent_urls"] == ["p"]
     db.delete_manual_links(["u1"])
     assert db.manual_links() == {}

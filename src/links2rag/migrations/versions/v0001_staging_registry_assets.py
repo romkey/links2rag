@@ -211,7 +211,7 @@ CREATE TABLE IF NOT EXISTS asset_manual_links (
     asset_ids       text[]      NOT NULL DEFAULT '{}',
     title           text,
     origin          text        NOT NULL,
-    parent_url      text,
+    parent_urls     text[]      NOT NULL DEFAULT '{}',
     status          text        NOT NULL DEFAULT 'pending',
     http_status     integer,
     error           text,

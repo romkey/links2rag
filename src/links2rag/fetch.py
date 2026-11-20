@@ -129,6 +129,22 @@ class Fetcher:
                 return f"{host} resolves to a non-public address"
         return None
 
+    def _peer_reason(self, response: httpx.Response) -> str | None:
+        """Why the connected address is not allowed, or None."""
+        if self.allow_private:
+            return None
+        stream = response.extensions.get("network_stream")
+        addr = stream.get_extra_info("server_addr") if stream is not None else None
+        if not addr:
+            return None
+        try:
+            address = ipaddress.ip_address(str(addr[0]).split("%")[0])
+        except ValueError:
+            return None
+        if not address.is_global:
+            return f"connected to non-public address {address}"
+        return None
+
     def fetch(self, url: str) -> Fetched:
         current = url
         for _ in range(_MAX_REDIRECTS + 1):
@@ -138,6 +154,13 @@ class Fetcher:
                 return Fetched(status, url, final_url=current, error=reason)
             try:
                 with self._client.stream("GET", current) as response:
+                    # The name is resolved again to connect; a host that
+                    # answered with a public address for the check could
+                    # answer differently now (DNS rebinding). Check the
+                    # address actually reached before reading anything.
+                    peer = self._peer_reason(response)
+                    if peer:
+                        return Fetched("blocked", url, final_url=current, error=peer)
                     if response.is_redirect and "location" in response.headers:
                         current = urljoin(current, response.headers["location"])
                         continue

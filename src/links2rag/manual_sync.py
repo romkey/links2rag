@@ -72,7 +72,21 @@ class Wanted:
     asset_ids: set[str] = field(default_factory=set)
     title: str | None = None
     origin: str = "link"
-    parent_url: str | None = None
+
+
+def redact_manual(parsed: ParsedManual) -> list[str]:
+    """Redact secrets in a parsed manual in place; returns the rules that matched."""
+    rules: set[str] = set()
+    parsed.title = redact(parsed.title).text
+    for section in parsed.sections:
+        heading = redact(section.heading)
+        section.heading = heading.text
+        rules.update(heading.rules)
+        for block in section.blocks:
+            result = redact(block.text)
+            block.text = result.text
+            rules.update(result.rules)
+    return sorted(rules)
 
 
 def build_ocr(settings: Settings) -> Callable[[bytes], str] | None:
@@ -237,53 +251,77 @@ class ManualSync:
         return []
 
     def sync_links(self, *, force: bool, allow_delete: bool) -> int:
-        """Bring asset_manual_links up to date and fetch what is due; returns fetches."""
+        """Bring asset_manual_links up to date and fetch what is due; returns fetches.
+
+        A file found on downloads or manufacturer pages records every page it
+        was on (``parent_urls``), and belongs to the assets of all of them that
+        are still linked, as well as to any asset that links to it directly.
+        """
         wanted = self.wanted_links()
         existing = self.db.manual_links()
-        # Files found on a downloads page belong to the assets of the page.
-        for url, row in existing.items():
-            parent = row["parent_url"]
-            if row["origin"] == "discovered" and parent in wanted and url not in wanted:
-                wanted[url] = Wanted(
-                    set(wanted[parent].asset_ids), row["title"], "discovered", parent
-                )
-        gone = sorted(set(existing) - set(wanted))
-        if gone and allow_delete:
-            self.db.delete_manual_links(gone)
+        parents: dict[str, set[str]] = {
+            url: set(row["parent_urls"]) for url, row in existing.items() if row["parent_urls"]
+        }
+        # Rows first: fetching records its outcome on the link's row.
         for url, entry in wanted.items():
             self.db.upsert_manual_link(
                 url=url,
                 asset_ids=sorted(entry.asset_ids),
                 title=entry.title,
                 origin=entry.origin,
-                parent_url=entry.parent_url,
+                parent_urls=sorted(parents.get(url, set())),
             )
         self.db.commit()
         fetched = 0
-        for url in sorted(u for u, e in wanted.items() if e.origin != "discovered"):
+        for url in sorted(wanted):
             if self.stop.is_set():
                 break
             if not self._due(existing.get(url), force):
                 continue
-            entry = wanted[url]
-            children = self._fetch(url, entry, follow=True)
+            children = self._fetch(url, wanted[url], follow=True)
             fetched += 1
             self.db.commit()
+            # The page now lists exactly these files.
+            for child, pages in parents.items():
+                if child not in children:
+                    pages.discard(url)
             for child in children:
-                if child in wanted and wanted[child].origin != "discovered":
-                    continue  # also linked directly; fetched on its own
-                self.db.upsert_manual_link(
-                    url=child,
-                    asset_ids=sorted(entry.asset_ids),
-                    title=entry.title,
-                    origin="discovered",
-                    parent_url=url,
-                )
-                if self._due(existing.get(child), force):
-                    self._fetch(
-                        child, Wanted(entry.asset_ids, entry.title, "discovered", url), follow=False
-                    )
-                    fetched += 1
+                parents.setdefault(child, set()).add(url)
+
+        links: dict[str, tuple[set[str], str | None, str, set[str]]] = {}
+        for url, entry in wanted.items():
+            links[url] = (set(entry.asset_ids), entry.title, entry.origin, set())
+        for child, pages in parents.items():
+            live = {p for p in pages if p in wanted}
+            if not live:
+                continue
+            assets = set().union(*(wanted[p].asset_ids for p in live))
+            title = next((wanted[p].title for p in sorted(live) if wanted[p].title), None)
+            if child in links:
+                own, own_title, origin, _ = links[child]
+                links[child] = (own | assets, own_title or title, origin, live)
+            else:
+                links[child] = (assets, title, "discovered", live)
+
+        gone = sorted(set(existing) - set(links))
+        if gone and allow_delete:
+            self.db.delete_manual_links(gone)
+        for url, (assets, title, origin, pages) in links.items():
+            self.db.upsert_manual_link(
+                url=url,
+                asset_ids=sorted(assets),
+                title=title,
+                origin=origin,
+                parent_urls=sorted(pages),
+            )
+        self.db.commit()
+
+        for url, (assets, title, origin, _) in sorted(links.items()):
+            if self.stop.is_set() or origin != "discovered":
+                continue
+            if self._due(existing.get(url), force):
+                self._fetch(url, Wanted(assets, title, origin), follow=False)
+                fetched += 1
                 self.db.commit()
         return fetched
 
@@ -368,15 +406,17 @@ class ManualSync:
                 counts.errors.append(f"manual {manual_id[:12]}: {type(e).__name__}: {e}")
                 logger.exception("Failed to parse manual %s", manual_id)
                 continue
-            redacted = redact(parsed.text)
+            # Redact before staging: nothing downstream (staging, the LLM's
+            # context prompt, the index) sees a secret. The file stays as-is.
+            rules = redact_manual(parsed)
             flags: JSON = {}
-            if redacted.findings:
-                flags["secret_redacted"] = redacted.rules
+            if rules:
+                flags["secret_redacted"] = rules
                 self.db.add_quarantine(
                     source=MANUAL_SOURCE,
                     source_doc_id=manual_id,
                     reason="secret redacted",
-                    detail={"rules": redacted.rules, "title": title},
+                    detail={"rules": rules, "title": title},
                     run_id=run_id,
                 )
             urls = [u["url"] for u in group["urls"] if u["url"]]
