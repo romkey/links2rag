@@ -1,0 +1,108 @@
+# Production: runs the released image from ghcr.io. Configure it in .env
+# next to this file (see .env.example and docs/configuration.md).
+#
+#   docker compose -f docker-compose.prod.yaml up -d             # start it
+#   APP_VERSION=1.2.3 docker compose -f docker-compose.prod.yaml up -d   # pin a release
+#   docker compose -f docker-compose.prod.yaml build             # build the image locally
+#
+# The ingester runs on its own (`serve`): a scan, then it sleeps
+# SCAN_INTERVAL_MINUTES (default 60) and scans again. Scans are incremental,
+# with a full reconcile every FULL_SCAN_INTERVAL_HOURS (default 24). It has
+# no port; its health check reads a heartbeat file. A one-off scan:
+#
+#   docker compose -f docker-compose.prod.yaml run --rm app links2rag run --mode reindex
+#
+# To force a complete rebuild (restage, re-download and re-embed everything):
+#
+#   docker compose -f docker-compose.prod.yaml run --rm app links2rag run --mode full --force
+#
+# or set FORCE_REINDEX=true in .env for serve's first scan.
+#
+# Each scan applies any pending database migrations first. Overlapping
+# scans are safe: a second one finds the lock held and skips.
+#
+# Downloaded manuals and reports live in the links-data volume (DATA_DIR,
+# /data). To add manuals by hand, mount a directory and set MANUALS_DIR.
+#
+# PostgreSQL and Qdrant are shared with the pipeline's other ingesters (they
+# write the same staging tables and hs_member collection). If they already
+# run elsewhere, delete the db and qdrant services and depends_on, and set
+# DATABASE_URL and QDRANT_URL in .env.
+
+services:
+  app:
+    image: ghcr.io/romkey/links2rag:${APP_VERSION:-latest}
+    build:
+      context: .
+      target: production
+    command: ["links2rag", "serve"]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "links2rag", "healthcheck"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    # On SIGTERM it finishes the item it is reading and indexes what is staged.
+    stop_grace_period: 5m
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      QDRANT_URL: ${QDRANT_URL:-http://qdrant:6333}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      qdrant:
+        condition: service_healthy
+      db:
+        condition: service_healthy
+    # Least privilege: nothing to write but /tmp and /data, no capabilities.
+    read_only: true
+    tmpfs:
+      - /tmp
+    volumes:
+      - links-data:/data
+      # - ./manuals:/manuals:ro   # with MANUALS_DIR=/manuals
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+
+  qdrant:
+    image: qdrant/qdrant:v1.20.0
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:6333:6333"
+    volumes:
+      - qdrant-data:/qdrant/storage
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c ':> /dev/tcp/127.0.0.1/6333'"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    security_opt:
+      - no-new-privileges:true
+
+  # No ports: only the ingesters on this network reach it. Back up db-data.
+  db:
+    image: postgres:18-trixie
+    restart: unless-stopped
+    env_file:
+      - path: .env
+        required: false
+    volumes:
+      - db-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  links-data:
+  qdrant-data:
+  db-data:

@@ -1,0 +1,20 @@
+# Changelog
+
+All notable changes to this project are documented here. The format follows
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
+[Semantic Versioning](https://semver.org/).
+
+## [Unreleased]
+
+### Added
+
+- Asset source of the PDX Hackerspace RAG pipeline (plans 00 and 06): every
+  thing in the asset manager is staged in PostgreSQL and indexed in
+  `hs_member` (`source: asset`), member tier only. Serial numbers, owner
+  names, network identifiers and integration records are staged but never
+  indexed; free text is scrubbed of secrets (quarantined) and identifiers.
+- `registry_assets` and asset aliases in `entity_aliases`, so other sources
+  can link to assets by name, label, make and model.
+- `serve` (scan, sleep `SCAN_INTERVAL_MINUTES`, repeat), `run --mode
+  incremental|full|reindex`, `--force` and `FORCE_REINDEX` for a complete
+  rebuild, `status`, `migrate` and `healthcheck`.
