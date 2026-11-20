@@ -520,3 +520,27 @@ def test_secrets_never_reach_staging_or_the_llm(db: Database, settings: Settings
     assert "hunter2" not in json.dumps(staged["raw_content"])
     assert seen
     assert all("hunter2" not in text for text in seen)
+
+
+def test_a_failed_page_refetch_keeps_its_files(db: Database, settings: Settings) -> None:
+    page = b"<html><body><a href='/files/saw.pdf'>Manual</a></body></html>"
+    client = FakeLinksClient(_saw(url="https://v.example.com/downloads"))
+    fetcher = FakeFetcher(
+        {"https://v.example.com/downloads": page, "https://v.example.com/files/saw.pdf": SAW_PDF}
+    )
+    p = _pipeline(db, settings, client, fetcher)
+    p.run("full")
+    before = _manual_payloads(p)
+    assert before
+    # The downloads page is down at the next check: its file stays indexed.
+    del fetcher.responses["https://v.example.com/downloads"]
+    del fetcher.responses["https://v.example.com/files/saw.pdf"]
+    p.run("full", force=True)
+    links = db.manual_links()
+    assert links["https://v.example.com/downloads"]["status"] == "dead"
+    assert links["https://v.example.com/files/saw.pdf"]["parent_urls"] == [
+        "https://v.example.com/downloads"
+    ]
+    after = _manual_payloads(p)
+    assert len(after) == len(before)
+    assert all(pl["link_dead"] for pl in after)

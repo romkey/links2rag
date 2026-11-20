@@ -194,8 +194,12 @@ class ManualSync:
         digest = self._store_file(content, kind)
         self.db.record_fetch(url, status="ok", manual_id=digest, content_type=kind)
 
-    def _fetch(self, url: str, wanted: Wanted, *, follow: bool) -> list[str]:
-        """Fetch one link; returns the same-site PDFs to fetch next (downloads pages)."""
+    def _fetch(self, url: str, wanted: Wanted, *, follow: bool) -> list[str] | None:
+        """Fetch one link; returns the same-site PDFs to fetch next (downloads pages).
+
+        None when the fetch failed: what the page lists is then unknown, and
+        the files found on it before are kept (with their last good copies).
+        """
         self.beat()
         if url.startswith(DROPIN_PREFIX):
             self._fetch_dropin(url)
@@ -210,7 +214,7 @@ class ManualSync:
                 error=result.error,
                 final_url=result.final_url,
             )
-            return []
+            return None
         if result.kind == "html":
             base = result.final_url or url
             manufacturer = wanted.origin == "manufacturer"
@@ -281,6 +285,8 @@ class ManualSync:
             children = self._fetch(url, wanted[url], follow=True)
             fetched += 1
             self.db.commit()
+            if children is None:
+                continue
             # The page now lists exactly these files.
             for child, pages in parents.items():
                 if child not in children:
