@@ -12,7 +12,7 @@ from typing import Any
 import pytest
 
 from links2rag import __main__ as cli
-from links2rag import __version__, pipeline
+from links2rag import __version__, commands, pipeline
 from links2rag.config import Settings
 from links2rag.db import RunCounts
 from links2rag.pipeline import RunResult
@@ -183,3 +183,34 @@ def test_serve_forces_only_the_first_scan(
     assert seen == [("full", True), ("incremental", False)]
     assert captured["interval"] == timedelta(minutes=5)
     assert captured["full_every"] == timedelta(hours=24)
+
+
+def test_other_commands(
+    monkeypatch: pytest.MonkeyPatch,
+    make_settings: SettingsFactory,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _use_settings(monkeypatch, make_settings())
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    def fake(settings: Settings, command: str, **kwargs: Any) -> Any:
+        calls.append((command, kwargs))
+        if kwargs.get("text") == "bad":
+            raise commands.CommandError("bad args")
+        if kwargs.get("text") == "boom":
+            raise RuntimeError("down")
+        return {"ok": command}
+
+    monkeypatch.setattr(commands, "run_command", fake)
+    assert cli.main(["report"]) == 0
+    assert json.loads(capsys.readouterr().out) == {"ok": "report"}
+    assert cli.main(["query", "3mm", "acrylic", "--asset", "abcd1234", "--source", "manual"]) == 0
+    assert calls[-1][1]["text"] == "3mm acrylic"
+    assert calls[-1][1]["sources"] == ["manual"]
+    assert calls[-1][1]["asset"] == "abcd1234"
+    assert cli.main(["aliases", "--approve", "3"]) == 0
+    assert calls[-1][1]["approve"] == 3
+    assert cli.main(["query", "boom"]) == 1
+    with pytest.raises(SystemExit) as exit_info:
+        cli.main(["query", "bad"])
+    assert exit_info.value.code == 2

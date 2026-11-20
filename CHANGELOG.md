@@ -26,3 +26,12 @@ All notable changes to this project are documented here. The format follows
   manual's sections, carry their page and a `#page=N` link, and are tagged
   with a `manual_section` kind. Only English is indexed. Dead links are
   recorded and keep their last good copy.
+- Nickname proposals: with `LLM_MODEL`, the LLM reads wiki and Slack
+  mentions of each asset and proposes the names members use; `links2rag
+  aliases` lists them and `--approve`/`--reject` decide.
+- A report after every full run (and `links2rag report`) of assets with no
+  wiki page, manual, location or training link, failing manual links,
+  quarantine and aliases to review, also written to
+  `DATA_DIR/reports/links2rag.json`.
+- `links2rag query`: hybrid search of `hs_member`, optionally filtered to
+  one asset or source.

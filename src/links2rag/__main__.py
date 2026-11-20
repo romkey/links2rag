@@ -11,6 +11,10 @@ staging store and entity registry, and the Qdrant hs_member collection.
   links2rag run --mode reindex        # rebuild every point from staging
   links2rag migrate                   # only create or update the schema
   links2rag status                    # recent runs and counts, as JSON
+  links2rag report                    # missing wiki pages, manuals, locations; dead links
+  links2rag aliases                   # nicknames proposed for review
+  links2rag aliases --approve 12      # make proposal 12 an alias (--reject 12 to drop it)
+  links2rag query "3mm acrylic settings" [--asset KEY] [--source manual]
   links2rag healthcheck               # exit 0 if serve is alive
 
 `serve` does a scan, sleeps SCAN_INTERVAL_MINUTES (default 60) and scans
@@ -34,7 +38,7 @@ from types import FrameType
 
 from dotenv import load_dotenv
 
-from links2rag import __version__, pipeline
+from links2rag import __version__, commands, pipeline
 from links2rag.config import ConfigError, Settings
 from links2rag.db import migrate
 from links2rag.pipeline import RunResult
@@ -77,9 +81,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         "command",
         nargs="?",
         default="serve",
-        choices=["serve", "run", "migrate", "status", "healthcheck"],
+        choices=["serve", "run", "migrate", "status", "report", "aliases", "query", "healthcheck"],
         help="what to do (default: serve)",
     )
+    parser.add_argument("text", nargs="*", help="for query: the search text")
     parser.add_argument(
         "--mode",
         default="full",
@@ -90,6 +95,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--force",
         action="store_true",
         help="for run and serve: restage and re-embed everything, ignoring content hashes",
+    )
+    parser.add_argument("--approve", type=int, metavar="ID", help="for aliases: approve one")
+    parser.add_argument("--reject", type=int, metavar="ID", help="for aliases: reject one")
+    parser.add_argument("--limit", type=int, default=5, help="for query: results (default 5)")
+    parser.add_argument("--asset", metavar="KEY", help="for query: only this asset's points")
+    parser.add_argument(
+        "--source",
+        action="append",
+        choices=["asset", "manual"],
+        help="for query: only these sources (repeatable; default both)",
     )
     args = parser.parse_args(argv)
 
@@ -129,6 +144,26 @@ def main(argv: Sequence[str] | None = None) -> int:
             logger.exception("Cannot read status")
             return 1
         sys.stdout.write(json.dumps(report, indent=2, default=str) + "\n")
+        return 0
+
+    if args.command in ("report", "aliases", "query"):
+        try:
+            output = commands.run_command(
+                settings,
+                args.command,
+                text=" ".join(args.text),
+                approve=args.approve,
+                reject=args.reject,
+                limit=args.limit,
+                asset=args.asset,
+                sources=args.source or ["asset", "manual"],
+            )
+        except commands.CommandError as e:
+            parser.exit(2, f"links2rag: {e}\n")
+        except Exception:
+            logger.exception("%s failed", args.command)
+            return 1
+        sys.stdout.write(json.dumps(output, indent=2, default=str) + "\n")
         return 0
 
     # `docker stop` sends SIGTERM: finish the thing being staged, index what

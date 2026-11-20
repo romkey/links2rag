@@ -41,6 +41,10 @@ links2rag run --mode full           # everything, then reconcile
 links2rag run --mode full --force   # restage, re-download and re-embed everything
 links2rag run --mode reindex        # rebuild points from staging (new model or chunker)
 links2rag status                    # recent runs and counts, as JSON
+links2rag report                    # assets without a wiki page, manual or location; dead links
+links2rag aliases                   # nicknames the LLM proposed, for review
+links2rag aliases --approve 12      # accept proposal 12 (--reject 12 to drop it)
+links2rag query "settings for 3mm acrylic" --source manual --asset abcd1234
 ```
 
 `FORCE_REINDEX=true` makes serve's first scan a forced full one.
