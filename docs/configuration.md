@@ -86,7 +86,7 @@ Use the same model and prefixes as the pipeline's other ingesters (for
 | `MANUAL_MAX_MB` | `50` | Largest file downloaded, in MB. |
 | `MANUALS_DIR` | unset | Manuals placed by hand: each file with a sidecar `<file>.yaml` or `<file>.json` holding `asset_keys` (a list) and optionally `title` and `url`. |
 | `DATA_DIR` | `/data` | Where downloaded manuals (`manuals/<sha256>.<ext>`) and reports (`reports/*.json`) are kept. Mount a volume here. |
-| `ALLOW_PRIVATE_HOSTS` | `false` | Allow manual links to private, loopback and link-local addresses. Off, only hosts that resolve to public addresses are fetched. |
+| `ALLOW_PRIVATE_HOSTS` | `true` | Fetch manual links on private, loopback and link-local addresses, such as the space's own servers. Set `false` to fetch only hosts that resolve to public addresses. |
 | `OCR_ENABLED` | `true` | OCR PDF pages with no text layer (scans) with tesseract, which the image includes. |
 | `OCR_LANGUAGE` | `eng` | Tesseract language(s), e.g. `eng+deu`. |
 

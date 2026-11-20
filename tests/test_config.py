@@ -20,6 +20,8 @@ def test_defaults() -> None:
     assert s.space_owner_names == DEFAULT_SPACE_OWNERS
     assert s.include_integration_sources == ()
     assert s.manuals_enabled is True
+    # Manuals often live on the space's own servers.
+    assert s.allow_private_hosts is True
     assert s.manual_pattern.search("User Manual")
     assert s.gateway_base_url == s.openai_base_url
     assert s.gateway_api_key is None

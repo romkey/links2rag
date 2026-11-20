@@ -1,7 +1,7 @@
 """Downloading manuals: host checks, size limits, file type, downloads pages.
 
-Only http(s) URLs on hosts that resolve to public addresses are fetched
-(unless ALLOW_PRIVATE_HOSTS), never the asset manager, geowiki, Slack or a
+Only http(s) URLs are fetched (with ALLOW_PRIVATE_HOSTS=false, only on hosts
+that resolve to public addresses), never the asset manager, geowiki, Slack or a
 host in SKIP_LINK_HOSTS, and every redirect is checked the same way. No
 credentials or cookies are ever sent.
 """
