@@ -75,7 +75,19 @@ an OpenAI-compatible gateway (embeddings and generation).
    `specifications`, `parts`: keyword rules on the heading, then the LLM),
    and a context line (LLM, else "From the manual X for Y, section Z, page N").
    Manual text passes the secret scanner too.
-8. `full` (and `reindex`) also deletes this source's points not stamped with
+8. Nicknames (with `LLM_MODEL`): for each changed asset (every asset on a
+   full run), the wiki and Slack points in `hs_member` that best match its
+   name and make are given to the LLM, which proposes the informal names
+   members use ("the big laser"). Proposals go to `registry_review_queue`
+   (kind `asset_alias`); `links2rag aliases --approve ID` adds one to
+   `entity_aliases`, where the linker of every source finds it, and keeps it
+   when the asset's generated aliases are rebuilt.
+9. Report (every full run, and `links2rag report`): assets with no wiki
+   page, no manual, no location or no training link (the asset manager has
+   no training field yet, so that list is every asset); failing manual
+   links; quarantine; aliases to review. Written to
+   `DATA_DIR/reports/links2rag.json`.
+10. `full` (and `reindex`) also deletes this source's points not stamped with
    the run's ID. Manuals no asset links to any more are deleted with their
    files. A Postgres advisory lock stops overlapping runs.
 
@@ -99,6 +111,9 @@ an OpenAI-compatible gateway (embeddings and generation).
 - `fetch.py`: downloads with host and size checks; downloads-page links.
 - `parse.py`: PDF and HTML manuals to sections, tables and pages.
 - `manuals.py`: manual chunks, section kinds, summaries, drop-in sidecars (pure).
+- `search.py`: hybrid (dense + sparse, RRF) search of `hs_member`.
+- `reports.py`: the gap and dead-link report.
+- `commands.py`: the `report`, `aliases` and `query` commands.
 - `documents.py`: point IDs, hashes and the shared payload (pure).
 - `db.py`: psycopg queries; `migrate()`. `migrations/`: Alembic schema.
 - `sanitize.py`: secret scanner. `linker.py`: alias matching.

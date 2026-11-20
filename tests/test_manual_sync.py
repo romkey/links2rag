@@ -14,7 +14,7 @@ from links2rag import manual_sync
 from links2rag.config import Settings
 from links2rag.db import Database
 from links2rag.fetch import Fetched, Kind
-from links2rag.llm import AssetAnalysis
+from links2rag.llm import AssetAnalysis, LLMError
 from links2rag.pipeline import Pipeline
 from tests.fakes import FakeEmbedder, FakeLinksClient, thing
 from tests.pdfgen import ENGLISH, GERMAN, Page, build_pdf
@@ -544,3 +544,24 @@ def test_a_failed_page_refetch_keeps_its_files(db: Database, settings: Settings)
     after = _manual_payloads(p)
     assert len(after) == len(before)
     assert all(pl["link_dead"] for pl in after)
+
+
+class FailingLLM(FakeLLM):
+    def chunk_context(self, *, document_title: str, document: str, chunk: str) -> str:
+        raise LLMError("down")
+
+    def manual_section(self, *, heading: str, text: str) -> str | None:
+        raise LLMError("down")
+
+
+def test_llm_failures_fall_back(db: Database, settings: Settings) -> None:
+    pdf = build_pdf([Page([("Introduction", 20), (ENGLISH, 10)])], title="Saw")
+    client = FakeLinksClient(_saw())
+    fetcher = FakeFetcher({"https://v.example.com/saw.pdf": pdf})
+    p = _pipeline(db, settings, client, fetcher, llm=FailingLLM())
+    assert p.run("full").status == "ok"
+    body = [pl for pl in _manual_payloads(p) if pl["block_kind"] == "text"]
+    assert body[0]["context"] == (
+        "From the manual Saw for Bandsaw (Rikon 10-305), section Introduction, page 1."
+    )
+    assert body[0]["manual_section"] is None

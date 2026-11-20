@@ -34,6 +34,7 @@ from qdrant_client import QdrantClient
 from qdrant_client import models as qm
 
 from links2rag import assets as asset_docs
+from links2rag import reports
 from links2rag.config import Settings
 from links2rag.db import Database, RunCounts, StagedDocument
 from links2rag.documents import (
@@ -56,6 +57,7 @@ from links2rag.manual_sync import (
     build_ocr,
 )
 from links2rag.qdrant_store import COMMON_INDEXES, LINKS_INDEXES, QdrantStore
+from links2rag.search import search
 from links2rag.sparse import SPARSE_ENCODER, sparse_vector
 
 logger = logging.getLogger(__name__)
@@ -64,6 +66,9 @@ logger = logging.getLogger(__name__)
 RUN_SOURCE = "links"
 # A run that sees less than this share of the previous run's things deletes nothing.
 SAFETY_RATIO = 0.5
+# Other sources whose text the nickname pass reads ("the big laser is down").
+NICKNAME_SOURCES = ("wiki", "slack")
+NICKNAME_MENTIONS = 6
 
 Mode = Literal["incremental", "full", "reindex"]
 # Any: staged records and payloads are JSON.
@@ -257,12 +262,17 @@ class Pipeline:
 
         todo = None if mode == "full" else changed
         self._index_or_forget(changed, todo, run_id, counts, force=force)
+        self.propose_nicknames(todo)
         if mode == "full" and status == "ok":
             self._delete_stale(run_id)
         if self.manuals is not None and not self.stop.is_set():
             self.manuals.run(
                 run_id, counts, force=force, full=mode == "full", allow_delete=status == "ok"
             )
+        if mode == "full":
+            report = reports.build(self.db)
+            reports.write(report, self.settings.data_dir)
+            logger.info("Report: %s", reports.summary(report))
         return RunResult(status, counts, message)
 
     def _index_or_forget(
@@ -458,6 +468,56 @@ class Pipeline:
             self.member.delete_docs(ASSET_SOURCE, hidden)
         embedded = self._embed_points(items, force=force)
         logger.info("Indexed %d assets (%d chunks embedded)", len(rows), embedded)
+
+    def propose_nicknames(self, asset_ids: list[str] | None) -> int:
+        """Ask the LLM for nicknames members use, from wiki and Slack mentions.
+
+        Proposals go to the review queue (``registry_review_queue``, kind
+        ``asset_alias``); `links2rag aliases --approve ID` makes one an alias.
+        Returns the number of new proposals.
+        """
+        if self.llm is None or asset_ids == []:
+            return 0
+        proposed = 0
+        for row in self.db.staged_documents(ASSET_SOURCE, asset_ids):
+            if self.stop.is_set():
+                break
+            self.beat()
+            asset = self._parse_staged(row)
+            try:
+                hits = search(
+                    self.qdrant,
+                    self.settings.member_collection,
+                    self.embedder,
+                    " ".join(p for p in (asset.name, asset.make_model) if p),
+                    limit=NICKNAME_MENTIONS,
+                    sources=NICKNAME_SOURCES,
+                )
+                mentions = [str((h.payload or {}).get("text") or "") for h in hits]
+                names = self.llm.propose_nicknames(
+                    name=asset.name,
+                    facts=asset_docs.facts(asset),
+                    mentions=[m for m in mentions if m],
+                )
+            except LLMError as e:
+                logger.warning("Nickname proposal failed for %s: %s", asset.asset_id, e)
+                continue
+            except Exception as e:
+                logger.warning("Nickname pass stopped: %s", e)
+                break
+            sources = sorted({str((h.payload or {}).get("url")) for h in hits} - {"None"})
+            known = {a.lower() for a in asset_docs.aliases(asset)}
+            for name in names:
+                if name.lower() in known:
+                    continue
+                if self.db.queue_alias(
+                    asset.asset_id, name, {"proposed_by": "llm", "from": sources}
+                ):
+                    proposed += 1
+            self.db.commit()
+        if proposed:
+            logger.info("Proposed %d asset nicknames for review", proposed)
+        return proposed
 
     def _embed_points(self, items: list[tuple[str, JSON]], *, force: bool) -> int:
         """Upsert (point id, payload) items, embedding only changed text."""
