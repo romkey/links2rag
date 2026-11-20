@@ -6,6 +6,12 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- `ALLOW_PRIVATE_HOSTS` now defaults to `true`: manual links on the space's
+  own servers (private addresses) are fetched. Set it to `false` to fetch
+  only public hosts.
+
 ## [0.1.0] - 2026-11-20
 
 ### Added

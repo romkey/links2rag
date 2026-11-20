@@ -88,7 +88,7 @@ class Settings:
     manual_max_mb: int = 50
     manuals_dir: str | None = None
     data_dir: str = "/data"
-    allow_private_hosts: bool = False
+    allow_private_hosts: bool = True
     ocr_enabled: bool = True
     ocr_language: str = "eng"
     scan_interval_minutes: int = 60
@@ -258,7 +258,7 @@ class Settings:
             manual_max_mb=integer("MANUAL_MAX_MB", 50, 1),
             manuals_dir=optional("MANUALS_DIR"),
             data_dir=optional("DATA_DIR") or "/data",
-            allow_private_hosts=boolean("ALLOW_PRIVATE_HOSTS", False),
+            allow_private_hosts=boolean("ALLOW_PRIVATE_HOSTS", True),
             ocr_enabled=boolean("OCR_ENABLED", True),
             ocr_language=optional("OCR_LANGUAGE") or "eng",
             scan_interval_minutes=integer("SCAN_INTERVAL_MINUTES", 60, 1),
