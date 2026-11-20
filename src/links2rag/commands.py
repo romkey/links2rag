@@ -68,8 +68,9 @@ def query(
     sources: Sequence[str],
     client: QdrantClient | None = None,
 ) -> list[dict[str, Any]]:
-    qdrant = client or QdrantClient(url=settings.qdrant_url, api_key=settings.qdrant_api_key)
+    # The embedder first: if it can't be built, no client is left open.
     embedder = build_embedder(settings)
+    qdrant = client or QdrantClient(url=settings.qdrant_url, api_key=settings.qdrant_api_key)
     try:
         hits = search(
             qdrant,
