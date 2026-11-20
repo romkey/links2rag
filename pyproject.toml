@@ -25,6 +25,11 @@ dependencies = [
   "sqlalchemy>=2.1.9",
   # A local .env for runs outside Docker.
   "python-dotenv>=1.2.4",
+  # Manuals: layout-aware PDF text and tables (pdfplumber), outlines (pypdf),
+  # and OCR of scanned pages through the tesseract binary (pytesseract).
+  "pdfplumber>=0.11.7",
+  "pypdf>=6.1.0",
+  "pytesseract>=0.3.13",
 ]
 
 [project.optional-dependencies]
@@ -80,7 +85,7 @@ files = ["src", "tests", "scripts"]
 
 # Optional extra, not installed in dev; has no stubs either way.
 [[tool.mypy.overrides]]
-module = ["sentence_transformers"]
+module = ["sentence_transformers", "pytesseract"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

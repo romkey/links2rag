@@ -42,8 +42,42 @@ an OpenAI-compatible gateway (embeddings and generation).
    asset tag), then the description and notes. Dense + sparse vectors;
    unchanged text (by content hash) is not re-embedded, and a changed
    payload alone is rewritten without re-embedding.
-5. `full` (and `reindex`) also deletes this source's points not stamped with
-   the run's ID. A Postgres advisory lock stops overlapping runs.
+5. Manuals (`manual_sync.py`). Every custom link whose title or URL matches
+   `MANUAL_LINK_PATTERN`, each thing's manufacturer link
+   (`MANUALS_FROM_MANUFACTURER_URL`) and every drop-in file in `MANUALS_DIR`
+   gets a row in `asset_manual_links`. A link is downloaded when it is new,
+   when its last check is older than `MANUAL_REFETCH_DAYS`, or on a forced
+   run. Only http(s) URLs on public hosts are fetched (every redirect is
+   checked too), never the asset manager, geowiki, Slack or `SKIP_LINK_HOSTS`;
+   nothing is sent but a user agent. An HTML downloads page (little text,
+   same-site PDF links) and a manufacturer page are followed one level, to
+   at most five PDFs (on a manufacturer page, only links that look like
+   manuals). Files are stored as `DATA_DIR/manuals/<sha256>.<pdf|html>` and
+   deduplicated by hash: one staged manual (`source: manual`, `doc_id` = the
+   hash) per file, its `asset_ids` every asset linking to it by any URL. A
+   failed check records the status (`dead`, `error`, `blocked`, `too_large`,
+   `unsupported`) and keeps the last good file indexed (`link_dead: true`);
+   replacements are never guessed.
+6. Parsing (`parse.py`): pdfplumber text by line, tables extracted as tables
+   (caption, header row, rows; never split), the PDF outline (pypdf) as
+   sections or, without one, lines at least 1.25× the body font size as
+   headings. Pages with no text layer are OCRed with tesseract. Pages that
+   are mostly drawing get a vision-model description marked
+   `[Machine-generated description of a diagram]` when `VISION_MODEL` is
+   set. HTML manuals split on h1–h4. Each section's language is detected;
+   only English (or too little text to tell) is indexed, the rest stays in
+   staging. A manual with no English is staged with `indexable = false`.
+7. Manual points (`source: manual`, authority 2): one summary point
+   (title, the assets it is for, its sections), then chunks along the
+   manual's sections, one page at a time, each with `page`, `heading_path`,
+   a URL that opens the PDF at that page (`#page=N`), `manual_section`
+   (`safety`, `setup`, `operation`, `maintenance`, `troubleshooting`,
+   `specifications`, `parts`: keyword rules on the heading, then the LLM),
+   and a context line (LLM, else "From the manual X for Y, section Z, page N").
+   Manual text passes the secret scanner too.
+8. `full` (and `reindex`) also deletes this source's points not stamped with
+   the run's ID. Manuals no asset links to any more are deleted with their
+   files. A Postgres advisory lock stops overlapping runs.
 
 ## Forcing a rebuild
 
@@ -61,6 +95,10 @@ an OpenAI-compatible gateway (embeddings and generation).
   aliases, manual candidates, registry rows (pure).
 - `pipeline.py`: `Pipeline.run(mode, force=...)`: staging, registry,
   indexing, reconcile.
+- `manual_sync.py`: manual links, downloads, staging and indexing.
+- `fetch.py`: downloads with host and size checks; downloads-page links.
+- `parse.py`: PDF and HTML manuals to sections, tables and pages.
+- `manuals.py`: manual chunks, section kinds, summaries, drop-in sidecars (pure).
 - `documents.py`: point IDs, hashes and the shared payload (pure).
 - `db.py`: psycopg queries; `migrate()`. `migrations/`: Alembic schema.
 - `sanitize.py`: secret scanner. `linker.py`: alias matching.
@@ -90,6 +128,11 @@ The shared payload (plan 00) plus: `asset_key`, `short_url`,
 `manufacturer`, `model`, `category` (the asset manager template's name),
 `ownership` (`space` or `member-loan`), `photos`, `links` (type, title,
 URL), `related_asset_ids`, `retired_asset_ids`, `payload_hash`.
+
+Manual points add: `manual_section`, `block_kind` (`summary`, `text`,
+`table`, `diagram`), `machine_generated`, `manual_kind` (`pdf` or `html`),
+`manual_urls`, `local_file` (relative to `DATA_DIR`), `link_dead`,
+`asset_names`.
 
 `asset_id` is the thing's short-URL key (printed on its QR label). Location
 IDs are `geowiki:<path>` from a thing's "Where" link to the geowiki

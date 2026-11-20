@@ -15,6 +15,12 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     UV_PROJECT_ENVIRONMENT=/venv \
     PATH=/venv/bin:$PATH
 WORKDIR /app
+# tesseract OCRs scanned manuals (OCR_ENABLED). Debian's package versions
+# change with each point release, so they aren't pinned.
+# hadolint ignore=DL3008
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends tesseract-ocr tesseract-ocr-eng \
+ && rm -rf /var/lib/apt/lists/*
 
 FROM base AS build
 COPY --from=ghcr.io/astral-sh/uv:0.13.7 /uv /uvx /bin/
